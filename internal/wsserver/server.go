@@ -1,6 +1,7 @@
 package wsserver
 
 import (
+	"context"
 	"github.com/gorilla/websocket"
 	log "github.com/sirupsen/logrus"
 	"net/http"
@@ -9,11 +10,15 @@ import (
 )
 
 const (
-	templateDir = "web/templates/html"
+	templateDir  = "web/templates/html"
+	pingInterval = 25 * time.Second // интервал отправки Ping
+	pongWait     = 30 * time.Second // время ожидания Pong
+	writeWait    = 5 * time.Second  // таймаут записи
 )
 
 type WSServer interface {
 	Start() error
+	Stop() error
 }
 
 type wsSrv struct {
@@ -40,7 +45,7 @@ func NewWsServer(addr string) WSServer {
 			WriteBufferPool:   nil,
 			Subprotocols:      nil,
 			Error:             nil,
-			CheckOrigin:       nil,
+			CheckOrigin:       nil, // чекнуть что это такое и почему в проде надо смотреть на это
 			EnableCompression: false,
 		},
 		wsClients: make(map[*websocket.Conn]struct{}),
@@ -52,14 +57,37 @@ func NewWsServer(addr string) WSServer {
 func (ws *wsSrv) Start() error {
 	ws.mux.Handle("/", http.FileServer(http.Dir(templateDir)))
 	ws.mux.HandleFunc("/ws", ws.wsHandler)
-	ws.mux.HandleFunc("/test", ws.testHandler)
 	go ws.writeToClientsBroadcast()
 	return ws.srv.ListenAndServe()
 }
 
-func (ws *wsSrv) testHandler(w http.ResponseWriter, r *http.Request) {
-	w.Write([]byte("Test is successful"))
-	log.Printf("Test is successful from %s", r.RemoteAddr)
+// Stop метод структуры wsSrv интерфеса WSServer
+// Выключает сервер (надо будет разобраться как отключать одно соединение, а не весь сервер
+// Закрывает канал close(ws.broadcast)
+// отправляет в цикле закрытия клиентов сообщение о закрытии (websocket.CloseMessage)
+func (ws *wsSrv) Stop() error { // нужно подробно разобрать
+	close(ws.broadcast)
+	ws.mutex.Lock()
+	// В цикле проходим по всем клиентам, выбираем на каждом шаге конкретное
+	// соединение Далее работаем с конкретным соединением Для StudBridge надо будет
+	// брать из таблицы два ip и закрывать их (1 комната)
+	// (как я полагаю, возможно что то поменяется)
+	for conn := range ws.wsClients {
+		// Отправляем сообщение о корректном закрытии соединения
+		conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+			time.Now().Add(writeWait),
+		)
+		// Закрываем соединение
+		conn.Close()
+		// удаляем
+		log.Infof("info about connection: %v", conn)
+		delete(ws.wsClients, conn)
+	}
+	ws.mutex.Unlock()
+	log.Info(ws.wsClients)
+	return ws.srv.Shutdown(context.Background())
 }
 
 func (ws *wsSrv) wsHandler(w http.ResponseWriter, r *http.Request) {
@@ -68,15 +96,31 @@ func (ws *wsSrv) wsHandler(w http.ResponseWriter, r *http.Request) {
 		log.Errorf("Error upgrading to websocket: %v", err)
 		return
 	}
-	log.Infof("Client with adress %s connected", conn.RemoteAddr().String())
+	log.Infof("Client with address %s connected", conn.RemoteAddr().String())
+
+	// соединение
+	conn.SetReadDeadline(time.Now().Add(pongWait)) //таймаут чтения , максимальное время ожидания
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
+
 	ws.mutex.Lock()
 	ws.wsClients[conn] = struct{}{}
 	ws.mutex.Unlock()
 	ws.wsClients[conn] = struct{}{}
+
 	go ws.readFromClient(conn)
 }
 
 func (ws *wsSrv) readFromClient(conn *websocket.Conn) {
+	// удалили текущее соединение (клиента) в конце выаполенния функции
+	defer func() {
+		ws.mutex.Lock()
+		delete(ws.wsClients, conn)
+		ws.mutex.Unlock()
+	}()
+
 	for {
 		msg := new(wsMsg)
 		err := conn.ReadJSON(msg)
@@ -84,25 +128,18 @@ func (ws *wsSrv) readFromClient(conn *websocket.Conn) {
 			log.Errorf("Error reading from websocket: %v", err)
 			break
 		}
-		//host, _, err := net.SplitHostPort(conn.RemoteAddr().String())
-		//if err != nil {
-		//	log.Errorf("Error reading from address split: %v", err)
-		//}
-		msg.IPAdress = conn.RemoteAddr().String()
+		msg.IPAddress = conn.RemoteAddr().String()
 		msg.Time = time.Now().Format("2006-01-02 15:04:05")
 		ws.broadcast <- msg
 	}
-	// удалили текущее соединение (клиента)
-	ws.mutex.Lock()
-	delete(ws.wsClients, conn)
-	ws.mutex.Unlock()
+
 }
 
 func (ws *wsSrv) writeToClientsBroadcast() {
 	for msg := range ws.broadcast {
 		ws.mutex.RLock()
 		for client := range ws.wsClients {
-			func() {
+			go func() {
 				if err := client.WriteJSON(msg); err != nil {
 					log.Errorf("Error writing to client: %v", err)
 				}

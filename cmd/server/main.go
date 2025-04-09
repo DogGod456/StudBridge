@@ -10,7 +10,7 @@ const (
 )
 
 func main() {
-	wsSrv := wsserver.NewWsServer(addr)
+	wsSrv := wsserver.NewWsServer(":8080")
 	log.Info("Starting server...")
 	if err := wsSrv.Start(); err != nil {
 		log.Errorf("Error starting wsServer: %v", err)
