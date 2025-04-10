@@ -21,13 +21,17 @@ type WSServer interface {
 	Stop() error
 }
 
+// для меня, тк не переваривалось
+// в структуре мы просто определяем какие поля будут у типа
+// далее говорим что будет в этом типе
+// изначально там по сути ничего (выделяется ли под это память или нет?)
 type wsSrv struct {
-	mux       *http.ServeMux // Мультиплексор для маршрутизации HTTP-запросов
-	srv       *http.Server   // HTTP-сервер, который будет обрабатывать подключения
-	wsUpg     websocket.Upgrader
-	wsClients map[*websocket.Conn]struct{}
-	mutex     sync.RWMutex // т.к мапа ws.wsClients[conn] = struct{}{} является потоконебезопасной и возникнет гонка
-	broadcast chan *wsMsg
+	mux       *http.ServeMux               // Мультиплексор для маршрутизации HTTP-запросов
+	srv       *http.Server                 // HTTP-сервер, который будет обрабатывать подключения
+	wsUpg     websocket.Upgrader           // Конфигурация для апгрейда HTTP -> WebSocket
+	wsClients map[*websocket.Conn]struct{} // Мапа активных WebSocket-клиентов
+	mutex     sync.RWMutex                 // т.к мапа ws.wsClients[conn] = struct{}{} является потоконебезопасной и возникнет гонка
+	broadcast chan *wsMsg                  // Канал для широковещательной рассылки сообщений ПЕРЕРАБОТАТЬ ДЛЯ КОНКРЕТНЫХ КЛИЕНТОВ
 }
 
 func NewWsServer(addr string) WSServer {
@@ -39,13 +43,13 @@ func NewWsServer(addr string) WSServer {
 			Handler: m,
 		},
 		wsUpg: websocket.Upgrader{
-			HandshakeTimeout:  5 * time.Second,
-			ReadBufferSize:    1024,
-			WriteBufferSize:   1024,
+			HandshakeTimeout:  5 * time.Second, // время рукопожатия
+			ReadBufferSize:    1024,            // буфер для чтения
+			WriteBufferSize:   1024,            // буфер для записи
 			WriteBufferPool:   nil,
 			Subprotocols:      nil,
 			Error:             nil,
-			CheckOrigin:       nil, // чекнуть что это такое и почему в проде надо смотреть на это
+			CheckOrigin:       nil, // !!! проверка домена (если nil, то разрешены все домены) !!!
 			EnableCompression: false,
 		},
 		wsClients: make(map[*websocket.Conn]struct{}),
@@ -57,7 +61,8 @@ func NewWsServer(addr string) WSServer {
 func (ws *wsSrv) Start() error {
 	ws.mux.Handle("/", http.FileServer(http.Dir(templateDir)))
 	ws.mux.HandleFunc("/ws", ws.wsHandler)
-	go ws.writeToClientsBroadcast()
+	//go ws.writeToClientsBroadcast()
+	//go ws.writeToClientBroadcast()
 	return ws.srv.ListenAndServe()
 }
 
@@ -111,6 +116,7 @@ func (ws *wsSrv) wsHandler(w http.ResponseWriter, r *http.Request) {
 	ws.wsClients[conn] = struct{}{}
 
 	go ws.readFromClient(conn)
+	go ws.writeToClientBroadcast(conn)
 }
 
 func (ws *wsSrv) readFromClient(conn *websocket.Conn) {
@@ -135,6 +141,42 @@ func (ws *wsSrv) readFromClient(conn *websocket.Conn) {
 
 }
 
+// writeToClientBroadcast - отвечает за управление исходящего трафика
+// пинг сообщения, отправка сообщений клиенту
+// такое ощущение, что утекает память...
+func (ws *wsSrv) writeToClientBroadcast(conn *websocket.Conn) {
+	// ticker - тикер, который срабатывает каждые pingInterval
+	ticker := time.NewTicker(pingInterval)
+	// Освобождение ресурсов после выхода
+	defer func() {
+		ticker.Stop()
+		conn.Close()
+	}()
+
+	for {
+		select {
+		case msg, ok := <-ws.broadcast:
+			conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if !ok {
+				conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+			if err := conn.WriteJSON(msg); err != nil {
+				log.Infof("Error writing to client: %v", err)
+				return
+			}
+		case <-ticker.C:
+			conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				log.Infof("Error writing to client: %v", err)
+				return
+			}
+		}
+	}
+}
+
+// writeToClientsBroadcast - рассылка сообщений всем подключенным клиентам, а не конкретным
+// идет под удаление
 func (ws *wsSrv) writeToClientsBroadcast() {
 	for msg := range ws.broadcast {
 		ws.mutex.RLock()
