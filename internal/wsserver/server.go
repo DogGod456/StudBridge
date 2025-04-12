@@ -26,12 +26,14 @@ type WSServer interface {
 // далее говорим что будет в этом типе
 // изначально там по сути ничего (выделяется ли под это память или нет?)
 type wsSrv struct {
-	mux       *http.ServeMux               // Мультиплексор для маршрутизации HTTP-запросов
-	srv       *http.Server                 // HTTP-сервер, который будет обрабатывать подключения
-	wsUpg     websocket.Upgrader           // Конфигурация для апгрейда HTTP -> WebSocket
-	wsClients map[*websocket.Conn]struct{} // Мапа активных WebSocket-клиентов
-	mutex     sync.RWMutex                 // т.к мапа ws.wsClients[conn] = struct{}{} является потоконебезопасной и возникнет гонка
-	broadcast chan *wsMsg                  // Канал для широковещательной рассылки сообщений ПЕРЕРАБОТАТЬ ДЛЯ КОНКРЕТНЫХ КЛИЕНТОВ
+	mux        *http.ServeMux                          // Мультиплексор для маршрутизации HTTP-запросов
+	srv        *http.Server                            // HTTP-сервер, который будет обрабатывать подключения
+	wsUpg      websocket.Upgrader                      // Конфигурация для апгрейда HTTP -> WebSocket
+	wsClients  map[*websocket.Conn]struct{}            // Мапа активных WebSocket-клиентов
+	mutex      sync.RWMutex                            // т.к мапа ws.wsClients[conn] = struct{}{} является потоконебезопасной и возникнет гонка
+	broadcast  chan *wsMsg                             // Канал для широковещательной рассылки сообщений ПЕРЕРАБОТАТЬ ДЛЯ КОНКРЕТНЫХ КЛИЕНТОВ
+	rooms      map[string]map[*websocket.Conn]struct{} // комнаты: {"room1": {conn1, conn2}}
+	roomsMutex sync.RWMutex
 }
 
 func NewWsServer(addr string) WSServer {
@@ -52,15 +54,21 @@ func NewWsServer(addr string) WSServer {
 			CheckOrigin:       nil, // !!! проверка домена (если nil, то разрешены все домены) !!!
 			EnableCompression: false,
 		},
-		wsClients: make(map[*websocket.Conn]struct{}),
-		mutex:     sync.RWMutex{},
-		broadcast: make(chan *wsMsg),
+		wsClients:  make(map[*websocket.Conn]struct{}),
+		mutex:      sync.RWMutex{},
+		broadcast:  make(chan *wsMsg),
+		roomsMutex: sync.RWMutex{},
+		rooms:      make(chan map[string]map[*websocket.Conn]struct{}),
 	}
 }
 
 func (ws *wsSrv) Start() error {
+	hub := newHub()
+	go hub.run()
 	ws.mux.Handle("/", http.FileServer(http.Dir(templateDir)))
-	ws.mux.HandleFunc("/ws", ws.wsHandler)
+	ws.mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		ws.wsHandler(hub, w, r)
+	})
 	//go ws.writeToClientsBroadcast()
 	//go ws.writeToClientBroadcast()
 	return ws.srv.ListenAndServe()
@@ -95,7 +103,7 @@ func (ws *wsSrv) Stop() error { // нужно подробно разобрат�
 	return ws.srv.Shutdown(context.Background())
 }
 
-func (ws *wsSrv) wsHandler(w http.ResponseWriter, r *http.Request) {
+func (ws *wsSrv) wsHandler(hub, w http.ResponseWriter, r *http.Request) {
 	conn, err := ws.wsUpg.Upgrade(w, r, nil)
 	if err != nil {
 		log.Errorf("Error upgrading to websocket: %v", err)
@@ -103,17 +111,7 @@ func (ws *wsSrv) wsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Infof("Client with address %s connected", conn.RemoteAddr().String())
 
-	// соединение
-	conn.SetReadDeadline(time.Now().Add(pongWait)) //таймаут чтения , максимальное время ожидания
-	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(pongWait))
-		return nil
-	})
-
-	ws.mutex.Lock()
-	ws.wsClients[conn] = struct{}{}
-	ws.mutex.Unlock()
-	ws.wsClients[conn] = struct{}{}
+	client := &Client{}
 
 	go ws.readFromClient(conn)
 	go ws.writeToClientBroadcast(conn)

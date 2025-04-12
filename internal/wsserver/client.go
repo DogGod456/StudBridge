@@ -20,9 +20,9 @@ var (
 )
 
 type Client struct {
-	hub  *Hub
-	conn *websocket.Conn
-	send chan []byte
+	hub       *Hub
+	conn      *websocket.Conn
+	broadcast chan *wsMsg
 }
 
 func (c *Client) readPump() {
