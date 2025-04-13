@@ -10,10 +10,11 @@ import (
 )
 
 const (
-	templateDir  = "web/templates/html"
-	pingInterval = 25 * time.Second // интервал отправки Ping
-	pongWait     = 30 * time.Second // время ожидания Pong
-	writeWait    = 5 * time.Second  // таймаут записи
+	templateDir    = "web/templates/html"
+	pingInterval   = 5 * time.Second  // интервал отправки Ping
+	pongWait       = 10 * time.Second // время ожидания Pong
+	writeWait      = 5 * time.Second  // таймаут записи
+	maxMessageSize = 1024 * 1024      // максимальный размер сообщения 1 Мб
 )
 
 type WSServer interface {
@@ -28,6 +29,7 @@ type wsSrv struct {
 	wsClients map[*websocket.Conn]struct{}
 	mutex     sync.RWMutex // т.к мапа ws.wsClients[conn] = struct{}{} является потоконебезопасной и возникнет гонка
 	broadcast chan *wsMsg
+	done      chan struct{} // для коректного закрытия горутин, чтобы они не весели
 }
 
 func NewWsServer(addr string) WSServer {
@@ -51,13 +53,14 @@ func NewWsServer(addr string) WSServer {
 		wsClients: make(map[*websocket.Conn]struct{}),
 		mutex:     sync.RWMutex{},
 		broadcast: make(chan *wsMsg),
+		done:      make(chan struct{}),
 	}
 }
 
 func (ws *wsSrv) Start() error {
-	ws.mux.Handle("/", http.FileServer(http.Dir(templateDir)))
 	ws.mux.HandleFunc("/ws", ws.wsHandler)
 	go ws.writeToClientsBroadcast()
+	log.Infof("Starting pure WebSocket server on %s", ws.srv.Addr)
 	return ws.srv.ListenAndServe()
 }
 
@@ -66,10 +69,13 @@ func (ws *wsSrv) Start() error {
 // Закрывает канал close(ws.broadcast)
 // отправляет в цикле закрытия клиентов сообщение о закрытии (websocket.CloseMessage)
 func (ws *wsSrv) Stop() error { // нужно подробно разобрать
+	close(ws.done)
 	close(ws.broadcast)
+
 	ws.mutex.Lock()
+	defer ws.mutex.Unlock()
 	// В цикле проходим по всем клиентам, выбираем на каждом шаге конкретное
-	// соединение Далее работаем с конкретным соединением Для StudBridge надо будет
+	// соединение Далее работаем с конкретным соединением Для sb надо будет
 	// брать из таблицы два ip и закрывать их (1 комната)
 	// (как я полагаю, возможно что то поменяется)
 	for conn := range ws.wsClients {
@@ -84,10 +90,13 @@ func (ws *wsSrv) Stop() error { // нужно подробно разобрат�
 		// удаляем
 		log.Infof("info about connection: %v", conn)
 		delete(ws.wsClients, conn)
+		log.Infof("Closed connection: %v", conn.RemoteAddr())
 	}
-	ws.mutex.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	log.Info(ws.wsClients)
-	return ws.srv.Shutdown(context.Background())
+	return ws.srv.Shutdown(ctx)
 }
 
 func (ws *wsSrv) wsHandler(w http.ResponseWriter, r *http.Request) {
@@ -96,11 +105,14 @@ func (ws *wsSrv) wsHandler(w http.ResponseWriter, r *http.Request) {
 		log.Errorf("Error upgrading to websocket: %v", err)
 		return
 	}
+
 	log.Infof("Client with address %s connected", conn.RemoteAddr().String())
 
 	// соединение
-	conn.SetReadDeadline(time.Now().Add(pongWait)) //таймаут чтения , максимальное время ожидания
+	conn.SetReadLimit(maxMessageSize)
+	conn.SetReadDeadline(time.Now().Add(pongWait))
 	conn.SetPongHandler(func(string) error {
+		log.Infof("Received pong from %s", conn.RemoteAddr())
 		conn.SetReadDeadline(time.Now().Add(pongWait))
 		return nil
 	})
@@ -108,7 +120,6 @@ func (ws *wsSrv) wsHandler(w http.ResponseWriter, r *http.Request) {
 	ws.mutex.Lock()
 	ws.wsClients[conn] = struct{}{}
 	ws.mutex.Unlock()
-	ws.wsClients[conn] = struct{}{}
 
 	go ws.readFromClient(conn)
 }
@@ -119,20 +130,60 @@ func (ws *wsSrv) readFromClient(conn *websocket.Conn) {
 		ws.mutex.Lock()
 		delete(ws.wsClients, conn)
 		ws.mutex.Unlock()
+		conn.Close()
 	}()
+
+	stopPing := make(chan struct{})
+	defer close(stopPing)
+	go ws.startPing(conn, stopPing)
 
 	for {
 		msg := new(wsMsg)
-		err := conn.ReadJSON(msg)
-		if err != nil {
-			log.Errorf("Error reading from websocket: %v", err)
+		if err := conn.ReadJSON(msg); err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway) {
+				log.Errorf("Read error: %v", err)
+			}
 			break
 		}
+
 		msg.IPAddress = conn.RemoteAddr().String()
-		msg.Time = time.Now().Format("2006-01-02 15:04:05")
-		ws.broadcast <- msg
+		msg.Time = time.Now().Format(time.RFC3339)
+		select {
+		case ws.broadcast <- msg:
+		case <-ws.done:
+			return
+		}
 	}
 
+}
+
+func (ws *wsSrv) startPing(conn *websocket.Conn, stopPing chan struct{}) {
+	ticker := time.NewTicker(pingInterval)
+	defer func() {
+		ticker.Stop()
+		conn.Close()
+	}()
+
+	for {
+		select {
+		case <-ticker.C:
+			ws.mutex.Lock()
+			err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeWait))
+			if err == nil {
+				log.Infof("Ping to %s", conn.RemoteAddr()) // Логируем успешный ping
+			}
+			ws.mutex.Unlock()
+
+			if err != nil {
+				log.Errorf("Ping failed: %v", err)
+				return
+			}
+		case <-stopPing:
+			return
+		case <-ws.done:
+			return
+		}
+	}
 }
 
 func (ws *wsSrv) writeToClientsBroadcast() {
