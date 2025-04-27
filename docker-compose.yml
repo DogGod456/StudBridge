@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  postgreDB:
+    image: postgres
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: admin
+
+  pong_micro:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+        DATABASE_URL=postgreDB
+    depends_on:
+      - postgreDB 
