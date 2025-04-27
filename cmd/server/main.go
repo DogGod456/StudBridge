@@ -1,8 +1,8 @@
 package main
 
 import (
-	"StudBridge/internal/wsserver"
 	log "github.com/sirupsen/logrus"
+	"sbChat/internal/wsserver"
 )
 
 const (

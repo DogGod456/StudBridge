@@ -1,4 +1,4 @@
-module StudBridge
+module sbChat
 
 go 1.23.1
 
