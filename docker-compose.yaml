@@ -1,18 +1,31 @@
-version: '3.8'
+version: '3.9'
 
 services:
-  postgreDB:
-    image: postgres
-    restart: always
-    environment:
-      POSTGRES_PASSWORD: admin
-
   pong_micro:
+    container_name: pong_micro_cont
     build: .
-    ports:
-      - "8080:8080"
-    environment:
-      - PORT=8080
-        DATABASE_URL=postgreDB
     depends_on:
-      - postgreDB 
+      - postgreDB
+    volumes:
+      - ./app:/pong_src/pong_micro
+    ports:
+      - "${APP_HOST_PORT}:8080"
+    restart: always
+    env_file:
+    # для безопасности данные среды хранятся в env 
+    # (обычо не заливается в репу)
+      - .env
+
+  postgreDB:
+    container_name: postgres_cont
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=database
+      - POSTGRES_USER=${POSTGRES_DB_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_DB_PASSWORD}
+    ports:
+      - "${POSTGRES_DB_HOST_PORT}:5432"
+    volumes:
+      # данные, которые появляются\меняются в постгре переходят на пк
+      - .postgres:/var/lib/postgres/data
+    restart: always
