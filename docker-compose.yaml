@@ -1,0 +1,36 @@
+version: '3.9'
+
+services:
+  pong_micro:
+    container_name: pong_micro_cont
+    build: .
+    depends_on:
+      - postgreDB
+    volumes:
+      - ./app:/pong_src/pong_micro
+    ports:
+      - "${APP_HOST_PORT}:8080"
+    restart: always
+    env_file:
+    # для безопасности данные среды хранятся в env 
+    # (обычо не заливается в репу)
+      - .env
+
+  postgreDB:
+    container_name: postgres_cont
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=database
+      - POSTGRES_USER=${POSTGRES_DB_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_DB_PASSWORD}
+    ports:
+      - "${POSTGRES_DB_HOST_PORT}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready", "--quiet"]
+      interval: 1s
+      timeout: 5s
+      retries: 10
+    volumes:
+      # данные, которые появляются\меняются в постгре переходят на пк
+      - .postgres:/var/lib/postgres/data
+    restart: always
