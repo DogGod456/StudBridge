@@ -2,158 +2,164 @@ package wsserver
 
 import (
 	"context"
-	"github.com/gorilla/websocket"
-	log "github.com/sirupsen/logrus"
+	"log"
 	"net/http"
+	"sbChat/internal/models"
+	"sbChat/internal/repository"
 	"sync"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
-const (
-	templateDir    = "web/templates/html"
-	pingInterval   = 5 * time.Second  // интервал отправки Ping
-	pongWait       = 10 * time.Second // время ожидания Pong
-	writeWait      = 5 * time.Second  // таймаут записи
-	maxMessageSize = 1024 * 1024      // максимальный размер сообщения 1 Мб
-)
-
-type WSServer interface {
-	Start() error
-	Stop() error
+// WsServer интерфейс для работы с WebSocket сервером
+// Содержит методы для запуска и остановки сервера
+type WsServer interface {
+	Start() error                   // Запускает сервер
+	Stop(ctx context.Context) error // Останавливает сервер с учетом контекста
 }
 
-type wsSrv struct {
-	mux       *http.ServeMux // Мультиплексор для маршрутизации HTTP-запросов
-	srv       *http.Server   // HTTP-сервер, который будет обрабатывать подключения
-	wsUpg     websocket.Upgrader
-	wsClients map[*websocket.Conn]struct{}
-	mutex     sync.RWMutex // т.к мапа ws.wsClients[conn] = struct{}{} является потоконебезопасной и возникнет гонка
-	broadcast chan *wsMsg
-	done      chan struct{} // для коректного закрытия горутин, чтобы они не весели
+// wsServer реализация WebSocket сервера
+type wsServer struct {
+	server    *http.Server                 // HTTP сервер для обработки соединений
+	upgrader  websocket.Upgrader           // Преобразователь HTTP в WebSocket
+	clients   map[*websocket.Conn]struct{} // Мапа подключенных клиентов
+	mu        sync.RWMutex                 // RWMutex для безопасного доступа к clients
+	broadcast chan models.Message          // Канал для трансляции сообщений клиентам
+	repo      repository.ChatRepository    // Репозиторий для работы с сообщениями в БД
 }
 
-func NewWsServer(addr string) WSServer {
-	m := http.NewServeMux()
-	return &wsSrv{
-		mux: m,
-		srv: &http.Server{
-			Addr:    addr,
-			Handler: m,
-		},
-		wsUpg: websocket.Upgrader{
-			HandshakeTimeout:  5 * time.Second,
-			ReadBufferSize:    1024,
-			WriteBufferSize:   1024,
-			WriteBufferPool:   nil,
-			Subprotocols:      nil,
-			Error:             nil,
-			CheckOrigin:       nil, // чекнуть что это такое и почему в проде надо смотреть на это
-			EnableCompression: false,
-		},
-		wsClients: make(map[*websocket.Conn]struct{}),
-		mutex:     sync.RWMutex{},
-		broadcast: make(chan *wsMsg),
-		done:      make(chan struct{}),
-	}
-}
-
-func (ws *wsSrv) Start() error {
-	ws.mux.HandleFunc("/ws", ws.wsHandler)
-	go ws.writeToClientsBroadcast()
-	log.Infof("Starting pure WebSocket server on %s", ws.srv.Addr)
-	return ws.srv.ListenAndServe()
-}
-
-// Stop метод структуры wsSrv интерфеса WSServer
-// Выключает сервер (надо будет разобраться как отключать одно соединение, а не весь сервер
-// Закрывает канал close(ws.broadcast)
-// отправляет в цикле закрытия клиентов сообщение о закрытии (websocket.CloseMessage)
-func (ws *wsSrv) Stop() error { // нужно подробно разобрать
-	close(ws.done)
-	close(ws.broadcast)
-
-	ws.mutex.Lock()
-	defer ws.mutex.Unlock()
-	// В цикле проходим по всем клиентам, выбираем на каждом шаге конкретное
-	// соединение Далее работаем с конкретным соединением Для sb надо будет
-	// брать из таблицы два ip и закрывать их (1 комната)
-	// (как я полагаю, возможно что то поменяется)
-	for conn := range ws.wsClients {
-		// Отправляем сообщение о корректном закрытии соединения
-		conn.WriteControl(
-			websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
-			time.Now().Add(writeWait),
-		)
-		// Закрываем соединение
-		conn.Close()
-		// удаляем
-		log.Infof("info about connection: %v", conn)
-		delete(ws.wsClients, conn)
-		log.Infof("Closed connection: %v", conn.RemoteAddr())
+// NewWsServer создает новый экземпляр WebSocket сервера
+// addr - адрес сервера (например ":8080")
+// repo - репозиторий для сохранения сообщений
+func NewWsServer(addr string, repo repository.ChatRepository) WsServer {
+	mux := http.NewServeMux()
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: mux,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	log.Info(ws.wsClients)
-	return ws.srv.Shutdown(ctx)
+	ws := &wsServer{
+		server: srv,
+		upgrader: websocket.Upgrader{
+			ReadBufferSize:  1024, // Размер буфера для чтения
+			WriteBufferSize: 1024, // Размер буфера для записи
+			CheckOrigin: func(r *http.Request) bool {
+				return true // В продакшене нужно реализовать проверку origin!
+			},
+		},
+		clients:   make(map[*websocket.Conn]struct{}), // Инициализация мапы клиентов
+		broadcast: make(chan models.Message, 256),     // Буферизированный канал на 256 сообщений
+		repo:      repo,                               // Сохраняем переданный репозиторий
+	}
+
+	// Регистрируем обработчик WebSocket соединений
+	mux.HandleFunc("/ws", ws.handleConnection)
+	return ws
 }
 
-func (ws *wsSrv) wsHandler(w http.ResponseWriter, r *http.Request) {
-	conn, err := ws.wsUpg.Upgrade(w, r, nil)
+// Start запускает WebSocket сервер
+// Запускает в отдельной горутине обработчик broadcast сообщений
+// Возвращает ошибку если сервер не смог запуститься
+func (ws *wsServer) Start() error {
+	go ws.handleBroadcasts() // Запускаем обработчик рассылки сообщений
+	return ws.server.ListenAndServe()
+}
+
+// Stop корректно останавливает WebSocket сервер
+// ctx - контекст для контроля времени остановки
+// Закрывает все соединения и останавливает сервер
+func (ws *wsServer) Stop(ctx context.Context) error {
+	close(ws.broadcast) // Закрываем канал broadcast для остановки горутин
+
+	ws.mu.Lock() // Блокируем запись для безопасной работы с clients
+	defer ws.mu.Unlock()
+
+	// Закрываем все активные соединения
+	for client := range ws.clients {
+		// Отправляем сообщение о закрытии соединения
+		client.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+		client.Close() // Закрываем соединение
+	}
+
+	return ws.server.Shutdown(ctx) // Останавливаем HTTP сервер
+}
+
+// handleConnection обрабатывает новое WebSocket соединение
+// w - HTTP ResponseWriter
+// r - HTTP Request
+func (ws *wsServer) handleConnection(w http.ResponseWriter, r *http.Request) {
+	// Обновляем HTTP соединение до WebSocket
+	conn, err := ws.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Errorf("Error upgrading to websocket: %v", err)
+		log.Printf("WebSocket upgrade error: %v", err)
 		return
 	}
 
-	log.Infof("Client with address %s connected", conn.RemoteAddr().String())
+	// Добавляем новое соединение в мапу клиентов
+	ws.mu.Lock()
+	ws.clients[conn] = struct{}{}
+	ws.mu.Unlock()
 
-	ws.mutex.Lock()
-	ws.wsClients[conn] = struct{}{}
-	ws.mutex.Unlock()
-
-	go ws.readFromClient(conn)
-}
-
-func (ws *wsSrv) readFromClient(conn *websocket.Conn) {
-	// удалили текущее соединение (клиента) в конце выполнения функции
+	// Гарантируем удаление соединения при выходе из функции
 	defer func() {
-		ws.mutex.Lock()
-		delete(ws.wsClients, conn)
-		ws.mutex.Unlock()
-		conn.Close()
+		ws.mu.Lock()
+		delete(ws.clients, conn) // Удаляем соединение из мапы
+		ws.mu.Unlock()
+		conn.Close() // Закрываем соединение
 	}()
 
+	// Читаем сообщения от клиента в цикле
 	for {
-		msg := new(wsMsg)
-		if err := conn.ReadJSON(msg); err != nil {
+		var msg models.Message
+		// Читаем JSON сообщение от клиента
+		if err := conn.ReadJSON(&msg); err != nil {
+			// Обрабатываем только неожиданные ошибки закрытия
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway) {
-				log.Errorf("Read error: %v", err)
+				log.Printf("Read error: %v", err)
 			}
 			break
 		}
 
-		msg.IPAddress = conn.RemoteAddr().String()
-		msg.Time = time.Now().Format(time.RFC3339)
-		select {
-		case ws.broadcast <- msg:
-		case <-ws.done:
-			return
+		// Сохраняем сообщение в БД через репозиторий
+		msgID, err := ws.repo.SendMessage(r.Context(), msg.ChatID, msg.SenderID, msg.Text, false)
+		if err != nil {
+			log.Printf("Failed to save message: %v", err)
+			continue
 		}
-	}
 
+		// Обновляем сообщение данными из БД
+		msg.ID = msgID
+		msg.SendingTime = time.Now()
+
+		// Отправляем сообщение в канал для трансляции
+		ws.broadcast <- msg
+	}
 }
 
-func (ws *wsSrv) writeToClientsBroadcast() {
+// handleBroadcasts рассылает сообщения всем подключенным клиентам
+// Работает в отдельной горутине до закрытия канала broadcast
+func (ws *wsServer) handleBroadcasts() {
+	// Читаем сообщения из канала пока он не закрыт
 	for msg := range ws.broadcast {
-		ws.mutex.RLock()
-		for client := range ws.wsClients {
-			go func() {
-				if err := client.WriteJSON(msg); err != nil {
-					log.Errorf("Error writing to client: %v", err)
+		ws.mu.RLock() // Блокируем на чтение
+
+		// Рассылаем сообщение всем клиентам
+		for client := range ws.clients {
+			go func(c *websocket.Conn) {
+				// Пытаемся отправить сообщение
+				if err := c.WriteJSON(msg); err != nil {
+					log.Printf("Write error: %v", err)
+					// При ошибке удаляем клиента
+					ws.mu.Lock()
+					delete(ws.clients, c)
+					ws.mu.Unlock()
+					c.Close() // Закрываем проблемное соединение
 				}
-			}()
+			}(client)
 		}
-		ws.mutex.RUnlock()
+
+		ws.mu.RUnlock() // Разблокируем чтение
 	}
 }

@@ -1,9 +1,16 @@
 package wsserver
 
-type wsMsg struct {
-	IDChat    string `json:"idChat"`
-	IPAddress string `json:"ip_address"`
-	IDSender  string `json:"idSender"`
-	Message   string `json:"message"`
-	Time      string `json:"time"`
+type WsRequest struct {
+	ChatID   string `json:"chat_id"`
+	SenderID string `json:"sender_id"`
+	Text     string `json:"text"`
+}
+
+type WsResponse struct {
+	MessageID string `json:"message_id"`
+	ChatID    string `json:"chat_id"`
+	SenderID  string `json:"sender_id"`
+	Text      string `json:"text"`
+	Timestamp int64  `json:"timestamp"`
+	Status    string `json:"status"`
 }
