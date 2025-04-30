@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   pong_micro:
     container_name: pong_micro_cont
@@ -8,12 +6,12 @@ services:
       postgreDB:
         condition: service_healthy
     environment:
-      - DB_HOST=postgresDB
-      - DB_PORT=5432
-      - DB_USER=$(POSTGRES_DB_USER)
-      - DB_PASSWORD=$(POSTGRES_DB_PASSWORD)
-      - DB_NAME=$(POSTGRES_DB_NAME)
-      - DB_SSLMODE=disable      
+      - PGHOST=postgreDB
+      - PGPORT=5432
+      - PGUSER=${POSTGRES_DB_USER}
+      - PGPASSWORD=${POSTGRES_DB_PASSWORD}
+      - PGNAME=${POSTGRES_DB_NAME}
+      - PGSSLMODE=disable      
     volumes:
       - ./app:/pong_src/pong_micro
     ports:
@@ -28,13 +26,13 @@ services:
     container_name: postgres_cont
     image: postgres:16-alpine
     environment:
-      - POSTGRES_DB=$(POSTGRES_DB_NAME)
+      - POSTGRES_DB=${POSTGRES_DB_NAME}
       - POSTGRES_USER=${POSTGRES_DB_USER}
       - POSTGRES_PASSWORD=${POSTGRES_DB_PASSWORD}
     ports:
       - "${POSTGRES_DB_HOST_PORT}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready", "--quiet"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_DB_USER} -d ${POSTGRES_DB_NAME}"]
       interval: 1s
       timeout: 5s
       retries: 10

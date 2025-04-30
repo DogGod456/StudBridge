@@ -21,7 +21,7 @@ type DatabaseConfig struct {
 }
 
 func LoadConfig() (*Config, error) {
-	dbPort, err := strconv.Atoi(getEnv("PGPORT", "5433"))
+	dbPort, err := strconv.Atoi(getEnv("PGPORT", "5432"))
 	if err != nil {
 		return nil, fmt.Errorf("invalid PGPORT: %w", err)
 	}
