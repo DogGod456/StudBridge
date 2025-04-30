@@ -15,6 +15,8 @@ services:
     # для безопасности данные среды хранятся в env 
     # (обычо не заливается в репу)
       - .env
+    networks:
+      - auth-network
 
   postgreDB:
     container_name: postgres_cont
@@ -34,3 +36,9 @@ services:
       # данные, которые появляются\меняются в постгре переходят на пк
       - .postgres:/var/lib/postgres/data
     restart: always
+    networks:
+      - auth-network
+
+networks:
+  auth-network:
+    driver: bridge
