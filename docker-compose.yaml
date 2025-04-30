@@ -5,7 +5,15 @@ services:
     container_name: pong_micro_cont
     build: .
     depends_on:
-      - postgreDB
+      postgreDB:
+        condition: service_healthy
+    environment:
+      - DB_HOST=postgresDB
+      - DB_PORT=5432
+      - DB_USER=$(POSTGRES_DB_USER)
+      - DB_PASSWORD=$(POSTGRES_DB_PASSWORD)
+      - DB_NAME=$(POSTGRES_DB_NAME)
+      - DB_SSLMODE=disable      
     volumes:
       - ./app:/pong_src/pong_micro
     ports:
@@ -15,14 +23,12 @@ services:
     # для безопасности данные среды хранятся в env 
     # (обычо не заливается в репу)
       - .env
-    networks:
-      - auth-network
 
   postgreDB:
     container_name: postgres_cont
     image: postgres:16-alpine
     environment:
-      - POSTGRES_DB=database
+      - POSTGRES_DB=$(POSTGRES_DB_NAME)
       - POSTGRES_USER=${POSTGRES_DB_USER}
       - POSTGRES_PASSWORD=${POSTGRES_DB_PASSWORD}
     ports:
@@ -36,9 +42,4 @@ services:
       # данные, которые появляются\меняются в постгре переходят на пк
       - .postgres:/var/lib/postgres/data
     restart: always
-    networks:
-      - auth-network
 
-networks:
-  auth-network:
-    driver: bridge
