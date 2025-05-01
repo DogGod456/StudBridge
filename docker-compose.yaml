@@ -1,19 +1,19 @@
 services:
-  pong_micro:
-    container_name: pong_micro_cont
+  messanger:
+    container_name: messanger_cont
     build: .
     depends_on:
-      postgreDB:
+      postgres:
         condition: service_healthy
     environment:
-      - PGHOST=postgreDB
-      - PGPORT=5432
+      - PGHOST=${POSTGRES_DB_HOST}
+      - PGPORT=${POSTGRES_DB_PORT}
       - PGUSER=${POSTGRES_DB_USER}
       - PGPASSWORD=${POSTGRES_DB_PASSWORD}
-      - PGNAME=${POSTGRES_DB_NAME}
-      - PGSSLMODE=disable      
+      - PGDATABASENAME=${POSTGRES_DB_NAME}
+      - PGSSLMODE=${PGSSLMODE_STATUS}      
     volumes:
-      - ./app:/pong_src/pong_micro
+      - ./app:/messanger_src/messanger
     ports:
       - "${APP_HOST_PORT}:8080"
     restart: always
@@ -21,8 +21,10 @@ services:
     # для безопасности данные среды хранятся в env 
     # (обычо не заливается в репу)
       - .env
+    networks:
+      - messanger-network
 
-  postgreDB:
+  postgres:
     container_name: postgres_cont
     image: postgres:16-alpine
     environment:
@@ -32,12 +34,19 @@ services:
     ports:
       - "${POSTGRES_DB_HOST_PORT}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_DB_USER} -d ${POSTGRES_DB_NAME}"]
-      interval: 1s
-      timeout: 5s
-      retries: 10
+      test: ["CMD-SHELL", "${HEALTHCHECK_CMD}"]
+      interval: ${HEALTHCHECK_INTERVAL} 
+      timeout:  ${HEALTHCHECK_TIMEOUT}
+      retries:  ${HEALTHCHECK_RETRIES}
     volumes:
       # данные, которые появляются\меняются в постгре переходят на пк
       - .postgres:/var/lib/postgres/data
     restart: always
+    networks:
+      - messanger-network
+
+networks:
+  messanger-network:
+    driver: bridge
+    name: messanger-network
 

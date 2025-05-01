@@ -1,5 +1,5 @@
 FROM golang:1.23.1-alpine AS builder
-WORKDIR /pong_src
+WORKDIR /messanger_src
 
 # dependencies
 RUN apk add --no-cache git
@@ -15,11 +15,11 @@ COPY web web/
 RUN CGO_ENABLED=0 go build -o bin/app ./cmd/server/main.go
 
 FROM alpine:latest
-WORKDIR /pong_src
+WORKDIR /messanger_src
 
 # bin
-COPY --from=builder /pong_src/bin/app /pong_src/app
-COPY --from=builder /pong_src/web/templates/html /pong_src/web/templates/html
+COPY --from=builder /messanger_src/bin/app /messanger_src/app
+COPY --from=builder /messanger_src/web/templates/html /messanger_src/web/templates/html
 
 EXPOSE 8080
-CMD ["/pong_src/app"]
+CMD ["/messanger_src/app"]
