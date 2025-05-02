@@ -12,6 +12,7 @@ type ChatRepository interface {
 	CreateChat(ctx context.Context) (string, error)
 	FindChatByParticipants(ctx context.Context, participant1ID, participant2ID string) (string, error)
 	DeleteChat(ctx context.Context, chatID string) error
+	GetChatByID(ctx context.Context, chatID string) (*models.Chat, error)
 
 	// Управление участниками
 	AddParticipant(ctx context.Context, chatID, participantID string) error
@@ -71,6 +72,24 @@ func (r *chatRepository) DeleteChat(ctx context.Context, chatID string) error {
 		chatID,
 	)
 	return err
+}
+
+// GetChatByID возвращает чат по его ID
+// ctx - контекст выполнения
+// chatID - ID чата для поиска
+func (r *chatRepository) GetChatByID(ctx context.Context, chatID string) (*models.Chat, error) {
+	var chat models.Chat
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id_chat, created_at, updated_at 
+         FROM chats 
+         WHERE id_chat = $1`,
+		chatID,
+	).Scan(&chat.ID, &chat.CreatedAt, &chat.UpdatedAt)
+
+	if err != nil {
+		return nil, err
+	}
+	return &chat, nil
 }
 
 func (r *chatRepository) AddParticipant(ctx context.Context, chatID, participantID string) error {
