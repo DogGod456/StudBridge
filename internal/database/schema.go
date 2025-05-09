@@ -95,7 +95,6 @@ CREATE TABLE IF NOT EXISTS pinned_chat (
     FOREIGN KEY (id_chat) REFERENCES chats(id_chat) ON DELETE CASCADE,
     FOREIGN KEY (id_participant) REFERENCES participants(id_participant) ON DELETE CASCADE,
     FOREIGN KEY (id_chats_folder) REFERENCES chats_folder(id_chats_folder) ON DELETE CASCADE
-
 );
 
 `
