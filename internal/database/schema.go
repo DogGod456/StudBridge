@@ -53,8 +53,49 @@ CREATE TABLE IF NOT EXISTS messages (
     updated_at TIMESTAMP
 );
 
--- Индексы для ускорения запросов
-CREATE INDEX IF NOT EXISTS idx_chat_senders_participant ON chat_senders(id_participant);
-CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(id_chat);
-CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(id_sender);
+
+-- Дополнительные таблицы
+-- Таблица архива
+CREATE TABLE IF NOT EXISTS archive_chat (
+    id_archive_chat UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_chat UUID NOT NULL,
+    id_participant UUID NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    FOREIGN KEY (id_chat) REFERENCES chats(id_chat) ON DELETE CASCADE,
+    FOREIGN KEY (id_participant) REFERENCES participants(id_participant) ON DELETE CASCADE
+);
+
+-- Таблица папки
+CREATE TABLE IF NOT EXISTS chats_folder (
+    id_chats_folder UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_participant UUID NOT NULL,
+    folder_name VARCHAR(32) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    FOREIGN KEY (id_participant) REFERENCES participants(id_participant) ON DELETE CASCADE
+
+);
+
+-- Таблица чатов в папке
+CREATE TABLE IF NOT EXISTS chats_in_folder (
+    id_chats_in_folder UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_chat UUID NOT NULL,
+    id_chats_folder UUID NOT NULL,
+    FOREIGN KEY (id_chat) REFERENCES chats(id_chat) ON DELETE CASCADE,
+    FOREIGN KEY (id_chats_folder) REFERENCES chats_folder(id_chats_folder) ON DELETE CASCADE
+);
+
+-- Таблица закреплённых чатов
+CREATE TABLE IF NOT EXISTS pinned_chat (
+    id_pinned_chat UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id_chat UUID NOT NULL,
+    id_participant UUID NOT NULL,
+    id_chats_folder UUID NOT NULL,
+    added_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    FOREIGN KEY (id_chat) REFERENCES chats(id_chat) ON DELETE CASCADE,
+    FOREIGN KEY (id_participant) REFERENCES participants(id_participant) ON DELETE CASCADE,
+    FOREIGN KEY (id_chats_folder) REFERENCES chats_folder(id_chats_folder) ON DELETE CASCADE
+
+);
+
 `

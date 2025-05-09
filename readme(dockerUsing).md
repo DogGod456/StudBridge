@@ -4,3 +4,5 @@
 
 ## Проверка подключения к бд:
 docker exec -it postgres_cont psql -U postgres -d chat_service
+
+/dt - see all tables in psql
