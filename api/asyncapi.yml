@@ -1,0 +1,9 @@
+asyncapi: 2.6.0
+info: 
+  title: asyncapi для добавления чатов в папки
+  version: 1.0.0
+  decription: |
+    Создание папок для чатов на основе событий Kafka
+
+servers:
+  kafka-prod:
