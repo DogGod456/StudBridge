@@ -1,9 +1,202 @@
 asyncapi: 2.6.0
-info: 
-  title: asyncapi для добавления чатов в папки
-  version: 1.0.0
-  decription: |
-    Создание папок для чатов на основе событий Kafka
+info:
+  title: AsyncAPI микросервисного взаимодействия.
+  version: version 1.0.3
+  description: |
+    Networking отправляет данные о мэтчинге в Chats через Kafka.
 
+# описание кафки
 servers:
   kafka-prod:
+    url: kafka://kafka.example.com:9092
+    protocol: kafka
+    security:
+      - scramSha256: []
+    bindings:
+      kafka:
+        groupId: chat-service-group
+
+# описание PUB/SUB топиков
+channels:
+  chats.manage:
+    description: Топик для событий управления чатами (создание/удаление)
+    publish:
+      operationId: sendChatEvent
+      message:
+        oneOf:
+          - $ref: '#/components/messages/chatCreated'
+          - $ref: '#/components/messages/chatDeleted'
+    subscribe:
+      operationId: receiveChatEvent
+      message:
+        oneOf:
+          - $ref: '#/components/messages/chatCreated'
+          - $ref: '#/components/messages/chatDeleted'
+    bindings:
+      kafka:
+        partitions: 1
+        replicationFactor: 1
+
+  auth.account.manage:
+    description: Топик для событий управления аккаунтами
+    publish:
+      operationId: sendAccountEvent
+      message:
+        oneOf:
+          - $ref: '#/components/messages/accountCreated'
+          - $ref: '#/components/messages/accountDeleted'
+    subscribe:
+      operationId: receiveAccountEvent
+      message:
+        oneOf:
+          - $ref: '#/components/messages/accountCreated'
+          - $ref: '#/components/messages/accountDeleted'
+    bindings:
+      kafka:
+        partitions: 1
+        replicationFactor: 1
+
+# описание структуры топиков
+components:
+  messages:
+    chatCreated:
+      name: chatCreated
+      summary: Событие создания чата
+      headers:
+        type: object
+        properties:
+          eventType:
+            type: string
+            enum: [CHAT_CREATED]
+        required:
+          - eventType
+      payload:
+        type: object
+        properties:
+          participants:
+            type: array
+            items:
+              $ref: '#/components/schemas/chatParticipant'
+            minItems: 2
+            maxItems: 2
+        required:
+          - participants
+
+    chatDeleted:
+      name: chatDeleted
+      summary: Событие удаления чата
+      headers:
+        type: object
+        properties:
+          eventType:
+            type: string
+            enum: [CHAT_DELETED]
+        required:
+          - eventType
+      payload:
+        type: object
+        properties:
+          id_chat:
+            type: string
+            format: uuid
+        required:
+          - id_chat
+
+    accountCreated:
+      name: accountCreated
+      summary: Событие создания аккаунта
+      headers:
+        type: object
+        properties:
+          eventType:
+            type: string
+            enum: [ACCOUNT_CREATED]
+        required:
+          - eventType
+      payload:
+        $ref: '#/components/schemas/accountData'
+
+    accountDeleted:
+      name: accountDeleted
+      summary: Событие удаления аккаунта
+      headers:
+        type: object
+        properties:
+          eventType:
+            type: string
+            enum: [ACCOUNT_DELETED]
+        required:
+          - eventType
+      payload:
+        type: object
+        properties:
+          id:
+            type: string
+            format: uuid
+        required:
+          - id
+
+  # описание содержимого объектов сообщений
+  schemas:
+    chatParticipant:
+      type: object
+      properties:
+        idParticipant:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [account, project]
+      required:
+        - idParticipant
+        - type
+
+    accountData:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        avatar:
+          type: string
+          format: binary
+        nickname:
+          type: string
+        first_name:
+          type: string
+        last_name:
+          type: string
+        middle_name:
+          type: string
+        date_of_birth:
+          type: string
+          format: date
+        id_city:
+          type: string
+          format: uuid
+        id_educational_institution:
+          type: string
+          format: uuid
+        id_specialization:
+          type: string
+          format: uuid
+        course_number:
+          type: integer
+          minimum: 1
+          maximum: 6
+        is_admin:
+          type: boolean
+        email:
+          type: string
+          format: email
+      required:
+        - id
+        - first_name
+        - id_educational_institution
+        - is_admin
+        - email
+
+  securitySchemes:
+    scramSha256:
+      type: scramSha256
+      description: SASL/SCRAM-SHA-256 аутентификация
