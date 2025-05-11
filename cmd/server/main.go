@@ -14,10 +14,6 @@ import (
 	"time"
 )
 
-const (
-	addr = "192.168.0.150:9090"
-)
-
 func main() {
 	// Загрузка конфигурации
 	cfg, err := config.LoadConfig()
