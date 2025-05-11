@@ -4,13 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"sbChat/internal/models"
 )
 
 type ChatRepository interface {
 	// Управление чатами
 	CreateChat(ctx context.Context) (string, error)
-	FindChatByParticipants(ctx context.Context, participant1ID, participant2ID string) (string, error)
+	FindChatByParticipants(ctx context.Context, participantIDs ...string) (string, error)
 	DeleteChat(ctx context.Context, chatID string) error
 
 	// Управление участниками
@@ -27,7 +28,7 @@ type ChatRepository interface {
 	DeleteMessage(ctx context.Context, messageID string) error
 
 	// Комплексные операции
-	CreateChatWithParticipants(ctx context.Context, participant1ID, participant2ID string) (string, error)
+	CreateChatWithParticipants(ctx context.Context, participantIDs ...string) (string, error)
 }
 
 type chatRepository struct {
@@ -46,18 +47,39 @@ func (r *chatRepository) CreateChat(ctx context.Context) (string, error) {
 	return chatID, err
 }
 
-func (r *chatRepository) FindChatByParticipants(ctx context.Context, participant1ID, participant2ID string) (string, error) {
+func (r *chatRepository) FindChatByParticipants(ctx context.Context, participantIDs ...string) (string, error) {
+	if len(participantIDs) == 0 {
+		return "", errors.New("at least one participant is required")
+	}
+
+	// Создаем параметры для запроса ($1, $2, ...)
+	params := make([]interface{}, len(participantIDs))
+	for i, id := range participantIDs {
+		params[i] = id
+	}
+
+	// Создаем часть запроса с IN условием
+	inClause := "("
+	for i := 1; i <= len(participantIDs); i++ {
+		if i > 1 {
+			inClause += ", "
+		}
+		inClause += fmt.Sprintf("$%d", i)
+	}
+	inClause += ")"
+
+	query := fmt.Sprintf(`
+        SELECT id_chat FROM (
+            SELECT id_chat, COUNT(*) as participants_count
+            FROM chat_senders
+            WHERE id_participant IN %s
+            GROUP BY id_chat
+        ) AS chats
+        WHERE participants_count = %d`,
+		inClause, len(participantIDs))
+
 	var chatID string
-	err := r.db.QueryRowContext(ctx, `
-		SELECT id_chat FROM (
-			SELECT id_chat, COUNT(*) as participants_count
-			FROM chat_senders
-			WHERE id_participant IN ($1, $2)
-			GROUP BY id_chat
-		) AS chats
-		WHERE participants_count = 2`,
-		participant1ID, participant2ID,
-	).Scan(&chatID)
+	err := r.db.QueryRowContext(ctx, query, params...).Scan(&chatID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
@@ -226,7 +248,11 @@ func (r *chatRepository) DeleteMessage(ctx context.Context, messageID string) er
 	return err
 }
 
-func (r *chatRepository) CreateChatWithParticipants(ctx context.Context, participant1ID, participant2ID string) (string, error) {
+func (r *chatRepository) CreateChatWithParticipants(ctx context.Context, participantIDs ...string) (string, error) {
+	if len(participantIDs) < 1 {
+		return "", errors.New("at least one participant is required")
+	}
+
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", err
@@ -241,12 +267,11 @@ func (r *chatRepository) CreateChatWithParticipants(ctx context.Context, partici
 		return "", err
 	}
 
-	participants := []string{participant1ID, participant2ID}
-	for _, pID := range participants {
+	for _, participantID := range participantIDs {
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO chat_senders (id_chat, id_participant)
-			VALUES ($1, $2)`,
-			chatID, pID,
+            VALUES ($1, $2)`,
+			chatID, participantID,
 		)
 		if err != nil {
 			return "", err
