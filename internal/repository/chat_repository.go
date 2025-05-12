@@ -8,27 +8,30 @@ import (
 	"sbChat/internal/models"
 )
 
+// ChatRepository интерфейс для работы с чатами и сообщениями
+// Содержит все методы для управления чатами, участниками и сообщениями
 type ChatRepository interface {
 	// Управление чатами
-	CreateChat(ctx context.Context) (string, error)
-	FindChatByParticipants(ctx context.Context, participantIDs ...string) (string, error)
-	DeleteChat(ctx context.Context, chatID string) error
+	CreateChat(ctx context.Context) (string, error)                                       // Создает новый чат и возвращает его ID
+	DeleteChat(ctx context.Context, chatID string) error                                  // Удаляет чат по его ID
+	GetChatByID(ctx context.Context, chatID string) (*models.Chat, error)                 // Получение чата по его ID
+	FindChatByParticipants(ctx context.Context, participantIDs ...string) (string, error) // Ищет чат между двумя участниками
 
 	// Управление участниками
-	AddParticipant(ctx context.Context, chatID, participantID string) error
-	GetChatParticipants(ctx context.Context, chatID string) ([]models.Participant, error)
-	IsParticipantInChat(ctx context.Context, chatID, participantID string) (bool, error)
-	GetParticipantType(ctx context.Context, participantID string) (string, error)
+	AddParticipant(ctx context.Context, chatID, participantID string) error               // Добавление участника в чат
+	GetChatParticipants(ctx context.Context, chatID string) ([]models.Participant, error) // Получение всех участников чата
+	IsParticipantInChat(ctx context.Context, chatID, participantID string) (bool, error)  // Проверка на нахождение участника в чате
+	GetParticipantType(ctx context.Context, participantID string) (string, error)         // Получение типа участника
 
 	// Работа с сообщениями
-	SendMessage(ctx context.Context, chatID, senderID, text string, isDraft bool) (string, error)
-	GetMessageByID(ctx context.Context, messageID string) (*models.Message, error)
-	GetChatMessages(ctx context.Context, chatID string, limit, offset int) ([]models.Message, error)
-	UpdateMessageStatus(ctx context.Context, messageID, status string) error
-	DeleteMessage(ctx context.Context, messageID string) error
+	SendMessage(ctx context.Context, chatID, senderID, text string, isDraft bool) (string, error)    // Отправка сообщения
+	GetMessageByID(ctx context.Context, messageID string) (*models.Message, error)                   // Получение сообщения по его ID
+	GetChatMessages(ctx context.Context, chatID string, limit, offset int) ([]models.Message, error) // Получение сообщений в чате
+	UpdateMessageStatus(ctx context.Context, messageID, status string) error                         // Обновление статуса сообщения
+	DeleteMessage(ctx context.Context, messageID string) error                                       // Удаление сообщения
 
 	// Комплексные операции
-	CreateChatWithParticipants(ctx context.Context, participantIDs ...string) (string, error)
+	CreateChatWithParticipants(ctx context.Context, participantIDs ...string) (string, error) // Создание чата по списку участников
 }
 
 type chatRepository struct {
@@ -45,6 +48,29 @@ func (r *chatRepository) CreateChat(ctx context.Context) (string, error) {
 		`INSERT INTO chats DEFAULT VALUES RETURNING id_chat`,
 	).Scan(&chatID)
 	return chatID, err
+}
+
+func (r *chatRepository) DeleteChat(ctx context.Context, chatID string) error {
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM chats WHERE id_chat = $1`,
+		chatID,
+	)
+	return err
+}
+
+func (r *chatRepository) GetChatByID(ctx context.Context, chatID string) (*models.Chat, error) {
+	var chat models.Chat
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id_chat, created_at, updated_at 
+		FROM chats 
+		WHERE id_chat = $1`,
+		chatID,
+	).Scan(&chat.ID, &chat.CreatedAt, &chat.UpdatedAt)
+
+	if err != nil {
+		return nil, err
+	}
+	return &chat, nil
 }
 
 func (r *chatRepository) FindChatByParticipants(ctx context.Context, participantIDs ...string) (string, error) {
@@ -85,14 +111,6 @@ func (r *chatRepository) FindChatByParticipants(ctx context.Context, participant
 		return "", nil
 	}
 	return chatID, err
-}
-
-func (r *chatRepository) DeleteChat(ctx context.Context, chatID string) error {
-	_, err := r.db.ExecContext(ctx,
-		`DELETE FROM chats WHERE id_chat = $1`,
-		chatID,
-	)
-	return err
 }
 
 func (r *chatRepository) AddParticipant(ctx context.Context, chatID, participantID string) error {
