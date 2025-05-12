@@ -49,7 +49,7 @@ type ChatSender struct {
 
 // CreateChatRequest запрос на создание чата
 type CreateChatRequest struct {
-	ParticipantIDs []string `json:"participant_ids" validate:"required,len=2"`
+	ParticipantIDs []string `json:"participant_ids" validate:"required"`
 }
 
 // SendMessageRequest запрос на отправку сообщения
