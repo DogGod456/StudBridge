@@ -9,7 +9,7 @@ CREATE TYPE message_status AS ENUM ('sent', 'delivered', 'read', 'failed');
 -- Таблица типов участников
 CREATE TABLE IF NOT EXISTS participant_types (
     id_participant_type UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    type_name VARCHAR(20) NOT NULL,
+    type_name TEXT NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP
 );
