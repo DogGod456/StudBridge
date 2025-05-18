@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS participant_types (
 CREATE TABLE IF NOT EXISTS participants (
     id_participant UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     id_participant_type UUID NOT NULL,
-    ref_id TEXT NOT NULL,
+    ref_id UUID NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP
 );
